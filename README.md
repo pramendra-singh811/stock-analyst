@@ -1,6 +1,6 @@
 # Indian Stock Analyst
 
-AI-powered equity research tool for Indian stocks (NSE/BSE). Powered by Claude.
+AI-powered equity research tool for Indian stocks (NSE/BSE). Powered by Google Gemini 2.0 Flash (free tier).
 
 Every claim is grounded in uploaded documents — no hallucinations. Quote-first sourcing ensures traceability.
 
@@ -17,7 +17,7 @@ Every claim is grounded in uploaded documents — no hallucinations. Quote-first
 ## Prerequisites
 
 - Python 3.10+
-- An [Anthropic API key](https://console.anthropic.com/)
+- A free [Google Gemini API key](https://aistudio.google.com/apikey)
 
 ## Installation
 
@@ -29,10 +29,12 @@ pip install -e .
 
 ## Configuration
 
-Set your API key via environment variable (recommended):
+Get your **free** API key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey).
+
+Set it via environment variable (recommended):
 
 ```bash
-export ANTHROPIC_API_KEY="sk-ant-..."
+export GEMINI_API_KEY="your-gemini-api-key-here"
 ```
 
 Or copy the example config:
@@ -114,7 +116,7 @@ stock-analyst projects
 stock-analyst/
 ├── src/
 │   ├── main.py              # CLI entry point
-│   ├── analyst.py            # Core analysis engine (Claude API)
+│   ├── analyst.py            # Core analysis engine (Gemini API)
 │   ├── prompts/
 │   │   ├── templates.py      # All prompt templates
 │   │   └── renderer.py       # Template rendering
@@ -132,9 +134,16 @@ stock-analyst/
 ## How It Works
 
 1. **System instructions** enforce quote-first sourcing — every claim must cite an exact quote from uploaded documents
-2. **Documents are sent** as content blocks in the Claude API call, giving the model full access to your filings
+2. **Documents are sent** as inline content parts in the Gemini API call, giving the model full access to your filings
 3. **Outputs are saved** as Markdown files and also stored back as documents, so future analyses can reference past conclusions
 4. **Indian market context** is built in — INR figures, SEBI/RBI frameworks, FY conventions, promoter holding tracking
+
+## Gemini Free Tier Limits
+
+- **Model:** Gemini 2.0 Flash
+- **Rate limit:** 15 requests per minute / 1,500 requests per day
+- **Context window:** 1,048,576 tokens (1M) — handles large PDFs easily
+- **Cost:** Free
 
 ## Supported Document Types
 

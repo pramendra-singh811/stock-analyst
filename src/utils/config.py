@@ -48,15 +48,15 @@ def save_project_meta(ticker: str, meta: dict) -> None:
 
 
 def get_api_key() -> str:
-    """Retrieve the Anthropic API key from config or environment."""
-    key = os.environ.get("ANTHROPIC_API_KEY")
+    """Retrieve the Gemini API key from config or environment."""
+    key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     if key:
         return key
     cfg = load_config()
-    key = cfg.get("anthropic_api_key")
+    key = cfg.get("gemini_api_key")
     if not key:
         raise ValueError(
-            "No API key found. Set ANTHROPIC_API_KEY env var or add "
-            "'anthropic_api_key' to config.yaml"
+            "No API key found. Set GEMINI_API_KEY env var or add "
+            "'gemini_api_key' to config.yaml"
         )
     return key

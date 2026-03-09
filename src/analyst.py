@@ -1,6 +1,7 @@
-"""Core analyst engine — sends prompts to Claude with document context."""
+"""Core analyst engine — sends prompts to Gemini with document context."""
 
-import anthropic
+from google import genai
+from google.genai import types
 
 from .documents.manager import DocumentManager
 from .prompts.renderer import render_prompt
@@ -13,8 +14,7 @@ from .utils.config import (
 )
 
 
-DEFAULT_MODEL = "claude-opus-4-6"
-MAX_TOKENS = 8192
+DEFAULT_MODEL = "gemini-2.0-flash"
 
 
 class StockAnalyst:
@@ -25,7 +25,7 @@ class StockAnalyst:
         self.company_name = company_name
         self.exchange = exchange.upper()
         self.doc_manager = DocumentManager(self.ticker)
-        self.client = anthropic.Anthropic(api_key=get_api_key())
+        self.client = genai.Client(api_key=get_api_key())
         self.model = DEFAULT_MODEL
 
         # Persist project metadata
@@ -48,44 +48,44 @@ class StockAnalyst:
             EXCHANGE=self.exchange,
         )
 
-    def _call_claude(
+    def _call_gemini(
         self,
         user_prompt: str,
         system: str | None = None,
         include_docs: bool = True,
         model: str | None = None,
-        extended_thinking: bool = False,
+        thinking: bool = False,
     ) -> str:
-        """Send a message to Claude and return the text response."""
+        """Send a message to Gemini and return the text response."""
         sys_prompt = system or self.system_prompt
 
-        # Build user content: documents first, then the prompt
-        user_content = []
+        # Build content parts: documents first, then the prompt
+        parts = []
         if include_docs:
-            user_content.extend(self.doc_manager.prepare_for_api())
-        user_content.append({"type": "text", "text": user_prompt})
+            parts.extend(self.doc_manager.prepare_for_api())
+        parts.append(types.Part.from_text(text=user_prompt))
 
-        kwargs = {
-            "model": model or self.model,
-            "max_tokens": MAX_TOKENS,
-            "system": sys_prompt,
-            "messages": [{"role": "user", "content": user_content}],
-        }
+        config = types.GenerateContentConfig(
+            system_instruction=sys_prompt,
+            temperature=0.7,
+        )
 
-        if extended_thinking:
-            kwargs["temperature"] = 1  # required for extended thinking
-            kwargs["thinking"] = {
-                "type": "enabled",
-                "budget_tokens": 4096,
-            }
+        if thinking:
+            config.thinking_config = types.ThinkingConfig(
+                thinking_budget=4096,
+            )
 
-        response = self.client.messages.create(**kwargs)
+        response = self.client.models.generate_content(
+            model=model or self.model,
+            contents=[types.Content(role="user", parts=parts)],
+            config=config,
+        )
 
         # Extract text from response
         text_parts = []
-        for block in response.content:
-            if block.type == "text":
-                text_parts.append(block.text)
+        for part in response.candidates[0].content.parts:
+            if part.text:
+                text_parts.append(part.text)
         return "\n".join(text_parts)
 
     def _save_output(self, name: str, content: str) -> str:
@@ -99,19 +99,17 @@ class StockAnalyst:
     # ── Step 2: Industry Analysis ──────────────────────────────────────
 
     def run_industry_analysis(self, industry_name: str) -> str:
-        """Generate an industry overview (Step 2). Uses extended thinking."""
+        """Generate an industry overview (Step 2). Uses thinking mode."""
         prompt = render_prompt("INDUSTRY_ANALYSIS", INDUSTRY_NAME=industry_name)
-        result = self._call_claude(
+        result = self._call_gemini(
             prompt,
             system="You are an industry analyst writing for long-term equity investors.",
             include_docs=False,
-            extended_thinking=True,
+            thinking=True,
         )
         path = self._save_output("industry_analysis", result)
 
         # Also save as a document for future reference
-        from pathlib import Path
-
         doc_path = self.doc_manager.docs_dir / "industry"
         doc_path.mkdir(exist_ok=True)
         (doc_path / "industry_analysis.md").write_text(result)
@@ -134,11 +132,11 @@ class StockAnalyst:
             TICKER=self.ticker,
             EXCHANGE=self.exchange,
         )
-        result = self._call_claude(
+        result = self._call_gemini(
             prompt,
             system="You are a research assistant helping find official Indian company filings.",
             include_docs=False,
-            extended_thinking=True,
+            thinking=True,
         )
         path = self._save_output("document_links", result)
         print(f"Document links saved to: {path}")
@@ -149,7 +147,7 @@ class StockAnalyst:
     def run_bull_case(self) -> str:
         """Generate the Lynch-style bull case (Step 4a)."""
         prompt = render_prompt("BULL_CASE", COMPANY_NAME=self.company_name)
-        result = self._call_claude(prompt)
+        result = self._call_gemini(prompt)
         path = self._save_output("bull_case", result)
 
         # Save as document for future reference
@@ -165,7 +163,7 @@ class StockAnalyst:
     def run_bear_case(self) -> str:
         """Generate the Munger-style bear case (Step 4b)."""
         prompt = render_prompt("BEAR_CASE", COMPANY_NAME=self.company_name)
-        result = self._call_claude(prompt)
+        result = self._call_gemini(prompt)
         path = self._save_output("bear_case", result)
 
         doc_path = self.doc_manager.docs_dir / "analysis"
@@ -184,7 +182,7 @@ class StockAnalyst:
             COMPANY_NAME=self.company_name,
             QUARTER=quarter,
         )
-        result = self._call_claude(prompt)
+        result = self._call_gemini(prompt)
         safe_name = quarter.replace(" ", "_").lower()
         path = self._save_output(f"quarterly_{safe_name}", result)
 
@@ -200,7 +198,7 @@ class StockAnalyst:
     def run_management_quality(self) -> str:
         """Run the management quality check."""
         prompt = PromptTemplates.MANAGEMENT_QUALITY
-        result = self._call_claude(prompt)
+        result = self._call_gemini(prompt)
         path = self._save_output("management_quality", result)
         print(f"Management quality check saved to: {path}")
         return result
@@ -210,7 +208,7 @@ class StockAnalyst:
         prompt = render_prompt(
             "COMPETITIVE_POSITION", COMPANY_NAME=self.company_name
         )
-        result = self._call_claude(prompt)
+        result = self._call_gemini(prompt)
         path = self._save_output("competitive_position", result)
         print(f"Competitive position saved to: {path}")
         return result
@@ -220,7 +218,7 @@ class StockAnalyst:
         prompt = render_prompt(
             "CAPITAL_ALLOCATION", COMPANY_NAME=self.company_name
         )
-        result = self._call_claude(prompt)
+        result = self._call_gemini(prompt)
         path = self._save_output("capital_allocation", result)
         print(f"Capital allocation scorecard saved to: {path}")
         return result
@@ -229,5 +227,5 @@ class StockAnalyst:
 
     def ask(self, question: str) -> str:
         """Ask any custom question with full document context."""
-        result = self._call_claude(question)
+        result = self._call_gemini(question)
         return result

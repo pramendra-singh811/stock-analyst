@@ -1,14 +1,24 @@
 """Manage documents for each stock project."""
 
-import base64
-import mimetypes
 import shutil
 from pathlib import Path
+
+from google.genai import types
 
 from ..utils.config import get_project_dir
 
 
 SUPPORTED_EXTENSIONS = {".pdf", ".txt", ".csv", ".json", ".md", ".docx", ".xlsx"}
+
+MIME_TYPES = {
+    ".pdf": "application/pdf",
+    ".txt": "text/plain",
+    ".csv": "text/csv",
+    ".json": "application/json",
+    ".md": "text/markdown",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+}
 
 
 class DocumentManager:
@@ -79,62 +89,35 @@ class DocumentManager:
                 return True
         return False
 
-    def prepare_for_api(self) -> list[dict]:
-        """Prepare all documents as content blocks for the Claude API.
+    def prepare_for_api(self) -> list[types.Part]:
+        """Prepare all documents as Gemini API Part objects.
 
-        Returns a list of content blocks suitable for the messages API.
-        PDFs are sent as base64-encoded document blocks.
-        Text files are sent as text content.
+        PDFs and binary files are sent as inline bytes.
+        Text files are sent as text parts.
+
+        Returns a list of google.genai.types.Part objects.
         """
-        content_blocks = []
+        parts = []
         for doc in self.list_documents():
             path = Path(doc["path"])
-            if path.suffix.lower() == ".pdf":
-                with open(path, "rb") as f:
-                    data = base64.standard_b64encode(f.read()).decode("utf-8")
-                content_blocks.append(
-                    {
-                        "type": "document",
-                        "source": {
-                            "type": "base64",
-                            "media_type": "application/pdf",
-                            "data": data,
-                        },
-                        "title": doc["name"],
-                    }
-                )
-            elif path.suffix.lower() in {".txt", ".csv", ".md", ".json"}:
+            ext = path.suffix.lower()
+            mime = MIME_TYPES.get(ext, "application/octet-stream")
+
+            if ext in {".txt", ".csv", ".md", ".json"}:
+                # Send text files as text content
                 text = path.read_text(errors="replace")
-                content_blocks.append(
-                    {
-                        "type": "text",
-                        "text": f"--- Document: {doc['name']} ---\n\n{text}",
-                    }
+                parts.append(
+                    types.Part.from_text(
+                        text=f"--- Document: {doc['name']} ---\n\n{text}"
+                    )
                 )
-            # .docx / .xlsx are uploaded as base64 with appropriate media type
-            elif path.suffix.lower() == ".docx":
-                mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                with open(path, "rb") as f:
-                    data = base64.standard_b64encode(f.read()).decode("utf-8")
-                content_blocks.append(
-                    {
-                        "type": "document",
-                        "source": {"type": "base64", "media_type": mime, "data": data},
-                        "title": doc["name"],
-                    }
+            else:
+                # Send binary files (PDF, DOCX, XLSX) as inline bytes
+                data = path.read_bytes()
+                parts.append(
+                    types.Part.from_bytes(data=data, mime_type=mime)
                 )
-            elif path.suffix.lower() == ".xlsx":
-                mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                with open(path, "rb") as f:
-                    data = base64.standard_b64encode(f.read()).decode("utf-8")
-                content_blocks.append(
-                    {
-                        "type": "document",
-                        "source": {"type": "base64", "media_type": mime, "data": data},
-                        "title": doc["name"],
-                    }
-                )
-        return content_blocks
+        return parts
 
     def get_document_summary(self) -> str:
         """Return a human-readable summary of stored documents."""
