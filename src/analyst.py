@@ -1,7 +1,10 @@
 """Core analyst engine — sends prompts to Gemini with document context."""
 
+import time
+
 from google import genai
 from google.genai import types
+from google.genai.errors import ClientError, ServerError
 
 from .documents.manager import DocumentManager
 from .prompts.renderer import render_prompt
@@ -16,6 +19,12 @@ from .utils.config import (
 
 DEFAULT_MODEL = "gemini-2.0-flash"
 
+# Gemini 2.0 Flash rate limits (free tier: 15 RPM, paid tier: 1000 RPM)
+_MAX_RETRIES = 5
+_INITIAL_BACKOFF = 5  # seconds
+_MAX_BACKOFF = 120  # seconds
+_MIN_REQUEST_INTERVAL = 4.0  # seconds between requests (~15 RPM safe margin)
+
 
 class StockAnalyst:
     """Orchestrates analysis for a single stock."""
@@ -27,6 +36,7 @@ class StockAnalyst:
         self.doc_manager = DocumentManager(self.ticker)
         self.client = genai.Client(api_key=get_api_key())
         self.model = DEFAULT_MODEL
+        self._last_request_time = 0.0
 
         # Persist project metadata
         meta = load_project_meta(self.ticker)
@@ -48,6 +58,15 @@ class StockAnalyst:
             EXCHANGE=self.exchange,
         )
 
+    def _throttle(self):
+        """Enforce minimum interval between API requests to stay within RPM."""
+        elapsed = time.time() - self._last_request_time
+        if elapsed < _MIN_REQUEST_INTERVAL:
+            wait = _MIN_REQUEST_INTERVAL - elapsed
+            print(f"  Rate-limiting: waiting {wait:.1f}s before next request...")
+            time.sleep(wait)
+        self._last_request_time = time.time()
+
     def _call_gemini(
         self,
         user_prompt: str,
@@ -56,7 +75,10 @@ class StockAnalyst:
         model: str | None = None,
         thinking: bool = False,
     ) -> str:
-        """Send a message to Gemini and return the text response."""
+        """Send a message to Gemini and return the text response.
+
+        Includes rate-limiting (≤15 RPM) and exponential backoff on 429/5xx.
+        """
         sys_prompt = system or self.system_prompt
 
         # Build content parts: documents first, then the prompt
@@ -75,18 +97,44 @@ class StockAnalyst:
                 thinking_budget=4096,
             )
 
-        response = self.client.models.generate_content(
-            model=model or self.model,
-            contents=[types.Content(role="user", parts=parts)],
-            config=config,
-        )
+        # Retry with exponential backoff on rate-limit / server errors
+        backoff = _INITIAL_BACKOFF
+        for attempt in range(1, _MAX_RETRIES + 1):
+            self._throttle()
+            try:
+                response = self.client.models.generate_content(
+                    model=model or self.model,
+                    contents=[types.Content(role="user", parts=parts)],
+                    config=config,
+                )
 
-        # Extract text from response
-        text_parts = []
-        for part in response.candidates[0].content.parts:
-            if part.text:
-                text_parts.append(part.text)
-        return "\n".join(text_parts)
+                # Extract text from response
+                text_parts = []
+                for part in response.candidates[0].content.parts:
+                    if part.text:
+                        text_parts.append(part.text)
+                return "\n".join(text_parts)
+
+            except ClientError as e:
+                if e.code == 429:
+                    if attempt == _MAX_RETRIES:
+                        print("Rate limit exceeded after all retries. "
+                              "Please wait a few minutes or check your quota.")
+                        raise
+                    print(f"  Rate limited (429). Retrying in {backoff}s "
+                          f"(attempt {attempt}/{_MAX_RETRIES})...")
+                    time.sleep(backoff)
+                    backoff = min(backoff * 2, _MAX_BACKOFF)
+                else:
+                    raise
+            except ServerError:
+                if attempt == _MAX_RETRIES:
+                    print("Server error after all retries.")
+                    raise
+                print(f"  Server error. Retrying in {backoff}s "
+                      f"(attempt {attempt}/{_MAX_RETRIES})...")
+                time.sleep(backoff)
+                backoff = min(backoff * 2, _MAX_BACKOFF)
 
     def _save_output(self, name: str, content: str) -> str:
         """Save analysis output to the project's outputs directory."""
